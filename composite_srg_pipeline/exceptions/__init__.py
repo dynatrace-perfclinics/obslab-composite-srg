@@ -1,0 +1,2 @@
+class WorkflowStillRunning(Exception):
+    pass

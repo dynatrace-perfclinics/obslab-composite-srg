@@ -1,0 +1,40 @@
+name: Push Action
+on: [push]
+jobs:
+  Validate-Code-Formatting:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      - name: Run Black Code Formatter
+        uses: psf/black@stable
+        with:
+          options: "--line-length 120"
+          src: "./composite_srg_pipeline"
+      - name: Run iSort Linter
+        uses: isort/isort-action@v1
+        with:
+          sort-paths: "./composite_srg_pipeline"
+          configuration: "--profile black --check-only --diff --line-length 120"
+  Validate-SRGs:
+    runs-on: ubuntu-latest
+    needs: Validate-Code-Formatting
+    env:
+      POETRY_VIRTUALENVS_CREATE: false
+      DT_CLIENT_ID: ${{vars.DT_CLIENT_ID}}
+      DT_CLIENT_SECRET: ${{secrets.DT_CLIENT_SECRET}}
+      DT_SRG_WORKFLOW_UUID: ${{vars.DT_SRG_WORKFLOW_UUID}}
+      DT_TASK_NAME: ${{vars.DT_TASK_NAME}}
+      DT_TENANT_ID: ${{vars.DT_TENANT_ID}}
+      DT_TOKEN_URL: ${{vars.DT_TOKEN_URL}}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      - name: Install Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Python Dependencies
+        run: pip install poetry && poetry install --no-interaction --without dev
+      - name: Launch SRG Validation Script
+        run: poetry run python composite_srg_pipeline/__init__.py
