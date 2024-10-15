@@ -1,0 +1,912 @@
+metadata:
+  version: "1"
+  dependencies:
+    apps:
+      - id: dynatrace.automations
+        version: ^1.905.5
+  inputs: []
+workflow:
+  title: "[Observability Lab] Generate SLO Data"
+  tasks:
+    create_slo_assets:
+      name: create_slo_assets
+      description: Create the SLOs which the SRGs inspect
+      action: dynatrace.automations:run-javascript
+      input:
+        script: >-
+          // optional import of sdk modules
+
+          import { execution } from '@dynatrace-sdk/automation-utils';
+
+          import { executionsClient } from '@dynatrace-sdk/client-automation';
+
+          import { serviceLevelObjectivesClient } from
+          '@dynatrace-sdk/client-classic-environment-v2';
+
+
+          // Used to fetch the results from the variable definition execution
+          step
+
+          // Should correspond to the step name
+
+          let config_step_name = "variable_definitions";
+
+
+          export default async function ({ execution_id }) {
+            // your code goes here
+            // e.g. get the current execution
+            const ex = await execution(execution_id);
+            let variables = await get_config(execution_id);
+
+            // Retreive required variables
+            let app_config = variables['app_config'];
+            let app_names = extract_app_names(app_config);
+
+            let workflow_tag = variables['workflow_tag'];
+            let metric_namespace = variables['metric_namespace'];
+            let metric_definitions = variables['metric_definitions'];
+
+            let SLOs = await get_SLOs(workflow_tag);
+
+            for(let app_name of app_names){
+              await create_SLOs(workflow_tag, app_name, metric_namespace, metric_definitions, SLOs);
+            }
+
+            return { result: 'success' };
+          }
+
+
+          async function create_SLOs(workflow_tag, app_name, namespace,
+          definitions, SLOs){
+            for(let key in definitions){
+              let slo_name = `[${workflow_tag}] [${app_name}] ${definitions[key]['name']}`;
+              if(SLOs.some(item => item.name === slo_name)){
+                  console.warn(`[WARN] SLO with name '${slo_name} already defined. Will not re-create.'`)
+              } else {
+                try {
+                  let data = await serviceLevelObjectivesClient.createSlo({
+                    body: {
+                      name: slo_name,
+                      metricExpression: slo_definitions(app_name, namespace, key, definitions[key]['name']),
+                      metricName: `${workflow_tag.toLowerCase().replace(" ", "_").replace(".", "_")}_${app_name.toLowerCase().replace(" ", "_").replace(".", "_")}_${definitions[key]['name'].toLowerCase().replace(" ", "_").replace(".", "_")}`,
+                      target: definitions[key]['target'],
+                      warning: definitions[key]['warning'],
+                      enabled: true,
+                      timeframe: "-30m",
+                      evaluationType: "AGGREGATE",
+                      errorBudgetBurnRate: {
+                        burnRateVisualizationEnabled: true,
+                        fastBurnThreshold: 10
+                      }
+                    }
+                  });
+                  console.log(`Successfully created SLO with Name: '${slo_name}'`)
+                } catch (resp) {
+                  console.log(`--- ERROR ---> API Response Code: ${resp.body.error.code}`);
+                  resp.body.error.constraintViolations.forEach((item) => {
+                    console.log(`---> ${item.message}`);
+                    console.log(`---> API Path: '${item.path}'`);
+                  });
+                  throw(resp);
+                }
+              }
+            }
+          }
+
+
+          function slo_definitions(app_name, namespace, metric_id, metric_name){
+            if(metric_id == "latency"){
+              return `(${namespace}.${metric_name}:max:partition("${metric_name}",value("good",le(10))):filter(eq("application","${app_name}")):splitBy():count:default(0)/${namespace}.${metric_name}:count:splitBy("application"):filter(eq("application","${app_name}")))*100`
+            }
+            else if (metric_id == "errors"){
+              return `(${namespace}.${metric_name}:sum:filter(eq("application","${app_name}")):partition("${metric_id}_count",value("${metric_id}_count",lt(3))):splitBy():count:default(0)/${namespace}.${metric_name}:sum:filter(eq("application","${app_name}")):splitBy():count())*100`
+            }
+            else if (metric_id == "traffic"){
+              return `(${namespace}.${metric_name}:avg:filter(eq("application","${app_name}")):partition("${metric_id}",value("${metric_id}",le(750))):splitBy():count:default(0)/${namespace}.${metric_name}:avg:filter(eq("application","${app_name}")):splitBy():count())*100`
+            }
+            else if (metric_id == "cpu_saturation"){
+              return `(${namespace}.${metric_name}:avg:filter(eq("application","${app_name}")):partition("${metric_id}",value("${metric_id}",lt(80))):splitBy():count:default(0)/${namespace}.${metric_name}:avg:filter(eq("application","${app_name}")):splitBy():count)*100`
+            } else {
+              throw(`Metric with name '${metric_name}' has no SLO Definition.  Review the function 'slo_definitions' to determine the 'metric_id' that requires expansion.`)
+            }
+          }
+
+
+          // Helper Functions
+
+
+          async function get_config ( exec_id ){
+            let configGet = await executionsClient.getTaskExecutionResult({
+              executionId: exec_id,
+              id: config_step_name
+            });
+
+            return configGet;
+          }
+
+
+          function extract_app_names ( app_config ){
+            let app_names = [];
+
+            app_config.forEach((item) => {
+              app_names.push(item['name']);
+            });
+
+            return app_names;
+          }
+
+
+          async function get_SLOs( workflow_tag ) {
+            let SLOs = [];
+
+            let query = {
+              sloSelector: `text("[${workflow_tag}]")`,
+            }
+
+            do {  
+              let result = await serviceLevelObjectivesClient.getSlo(query);
+              
+              if( result ){
+                result['slo'].forEach(item => SLOs.push(
+                  {
+                    name: item['name'],
+                    id: item['id']
+                  }
+                ));
+              }
+
+              /* The SLOs API only expects the `nextPageKey` attribute
+                 in subsequent requests. Thus we overwrite the original
+                 query variable below with the current `nextPageKey`
+              */
+              query = {
+                nextPageKey: result['nextPageKey']
+              }
+              
+            } while (query['nextPageKey']);
+
+            return SLOs;  
+          }
+      position:
+        x: 1
+        y: 2
+      predecessors:
+        - variable_definitions
+      conditions:
+        states:
+          variable_definitions: OK
+        custom: '{{ result("variable_definitions").create_assets == true }}'
+    delete_slo_assets:
+      name: delete_slo_assets
+      description: Programatically identify SLOs created by this workflow and delete them
+      action: dynatrace.automations:run-javascript
+      input:
+        script: >-
+          // optional import of sdk modules
+
+          import { execution } from '@dynatrace-sdk/automation-utils';
+
+          import { executionsClient } from '@dynatrace-sdk/client-automation';
+
+          import { serviceLevelObjectivesClient } from
+          '@dynatrace-sdk/client-classic-environment-v2';
+
+
+          // Used to fetch the results from the variable definition execution
+          step
+
+          // Should correspond to the step name
+
+          let config_step_name = "variable_definitions";
+
+
+          export default async function ({ execution_id }) {
+            // your code goes here
+            // e.g. get the current execution
+            const ex = await execution(execution_id);
+            let variables = await get_config(execution_id);
+
+            // Retreive required variables
+            let app_config = variables['app_config'];
+            let app_names = extract_app_names(app_config);
+
+            let workflow_tag = variables['workflow_tag'];
+            let metric_namespace = variables['metric_namespace'];
+            let metric_definitions = variables['metric_definitions'];
+
+            await delete_SLOs(app_names, workflow_tag, metric_namespace, metric_definitions)
+
+            return { result: 'success' };
+          }
+
+
+          async function delete_SLOs(app_names, workflow_tag, metric_namespace,
+          metric_definitions){
+            let slos = await get_SLOs(workflow_tag);
+
+            let slo_ids_to_delete = [];
+
+            // Iterate over SLO definitions to identify if the SLO exists and add it to the list to be deleted
+            for(let app_name of app_names){
+              for(let key in metric_definitions){
+                let slo_name = `[${workflow_tag}] [${app_name}] ${metric_definitions[key]['name']}`;
+                let slo_id = slos.find(item => item.name === slo_name)?.id;
+                if(slo_id){
+                  slo_ids_to_delete.push(slo_id);
+                } else {
+                  console.warn(`[WARNING] Could not find SLO ID for SLO with name '${slo_name}' - Will Not Delete.`)
+                }
+              }
+            }
+
+            await Promise.all(slo_ids_to_delete.map(async (id) => {
+              await delete_SLO(id);
+              console.log(`Successfully deleted SLO - Name: ${slos.find(item => item.id === id)?.name} - ID: ${id}`)
+            }));
+          }
+
+
+          // Helper Functions
+
+
+          async function get_config ( exec_id ){
+            let configGet = await executionsClient.getTaskExecutionResult({
+              executionId: exec_id,
+              id: config_step_name
+            });
+
+            return configGet;
+          }
+
+
+          function extract_app_names ( app_config ){
+            let app_names = [];
+
+            app_config.forEach((item) => {
+              app_names.push(item['name']);
+            });
+
+            return app_names;
+          }
+
+
+          async function get_SLOs( workflow_tag ) {
+            let SLOs = [];
+
+            let query = {
+              sloSelector: `text("[${workflow_tag}]")`,
+            }
+
+            do {  
+              let result = await serviceLevelObjectivesClient.getSlo(query);
+              
+              if( result ){
+                result['slo'].forEach(item => SLOs.push(
+                  {
+                    name: item['name'],
+                    id: item['id']
+                  }
+                ));
+              }
+
+              /* The SLOs API only expects the `nextPageKey` attribute
+                 in subsequent requests. Thus we overwrite the original
+                 query variable below with the current `nextPageKey`
+              */
+              query = {
+                nextPageKey: result['nextPageKey']
+              }
+              
+            } while (query['nextPageKey']);
+
+            return SLOs;  
+          }
+
+
+          async function delete_SLO(id){
+            try {
+              await serviceLevelObjectivesClient.deleteSlo({
+                id: id
+              });
+              return true;
+            } catch (error){
+              console.error(error);
+              throw (error)
+            }
+          }
+      position:
+        x: -2
+        y: 2
+      predecessors:
+        - variable_definitions
+      conditions:
+        states:
+          variable_definitions: OK
+        custom: '{{ result("variable_definitions").delete_assets == true }}'
+    generate_metric_data:
+      name: generate_metric_data
+      description: Iterates over config to emit metrics for defined SLOs
+      action: dynatrace.automations:run-javascript
+      active: true
+      input:
+        script: >-
+          // optional import of sdk modules
+
+          import { execution } from '@dynatrace-sdk/automation-utils';
+
+          import { executionsClient } from '@dynatrace-sdk/client-automation';
+
+          import { metricsClient } from
+          '@dynatrace-sdk/client-classic-environment-v2';
+
+
+          // Used to fetch the results from the variable definition execution
+          step
+
+          // Should correspond to the step name
+
+          let config_step_name = "variable_definitions";
+
+
+          export default async function ({ execution_id }) {
+            // your code goes here
+            // e.g. get the current execution
+            const ex = await execution(execution_id);
+
+            let variables = await get_config(execution_id);
+
+            // Validate required variables are defined
+            let app_config = variables['app_config'];
+            let metric_namespace = variables['metric_namespace'];
+            let metric_definitions = variables['metric_definitions'];
+            let total_degredation = variables['total_degredation'];
+
+            console.log(
+          `---------------- Function Start ----------------
+            > Total Degredation: ${total_degredation}
+            > App Names : ${extract_app_names(app_config).join(', ')}
+            > Metric Namespace: ${metric_namespace}
+            > Metric Definitions: ${Object.values(metric_definitions).map(def => `Name: ${def.name}, Degredated: ${def.degredated}`).join('; ')}
+          ------------------------------------------------
+
+          `);
+
+            if (!app_config || ! metric_namespace || !metric_definitions){
+              throw("Required Variable Defintions are not found.");
+            }
+
+            await Promise.all(app_config.map(async (config) => {
+              await generateSLIMetrics(config, metric_namespace, metric_definitions, total_degredation);
+            }));
+
+            return { triggeredBy: ex.trigger };
+          }
+
+
+          /**
+           * The following function generates a block of text
+           * we emit to the Dynatrace Custom Metric API.
+           * `app_id` is a Metric Dimension corresponding to a
+           * mock Application (i.e. billing, backend, frontend).
+           * 
+           * `app_id` can either be a plain name or appending
+           * `-true` to the name will enable a degredation simulation.
+           * This simulation will help to breach the SLOs and demonstrate
+           * failures in the SRG
+          **/
+
+          async function generateSLIMetrics( app_config, metric_namespace,
+          metric_definitions, total_degredation ){  
+
+            console.log(`> Generating Metrics for '${app_config.name}'`)
+            
+            let mapping = {
+              latency: return_latency(total_degredation ? true : (app_config.degredated && metric_definitions.latency.degredated)),
+              errors: return_errors(total_degredation ? true : (app_config.degredated && metric_definitions.errors.degredated)),
+              traffic: return_traffic(total_degredation ? true : (app_config.degredated && metric_definitions.traffic.degredated)),
+              cpu_saturation: return_saturation(total_degredation ? true : (app_config.degredated && metric_definitions.cpu_saturation.degredated))
+            };
+
+            let metric = '';
+            let entries = Object.entries(mapping);
+
+            entries.forEach(([k, v], i) => {
+              metric += `${metric_namespace}.${metric_definitions[k].name},application=${app_config.name} ${v}`;
+              
+              if (i !== entries.length - 1){
+                metric += "\n"
+              }
+            });
+
+            console.log(
+          `---------------- '${app_config.name}' Metric Body ----------------
+
+          ${metric}
+
+          ------------------------------------------------
+
+          `
+            )
+            
+            let result = await metricsClient.ingest(
+              {
+                body: metric
+              }
+            );
+
+            console.log(`---------------- '${app_config.name}' API Result ----------------`);
+            console.log(result);
+            console.log('------------------------------------------------\n');
+          }
+
+
+          function return_latency(app_degredation){
+            if (app_degredation){
+              console.log("---> Returning Degredated Latency")
+              return getRandomInt(20,40)
+            } else {
+              let chance = Math.floor(Math.random() * 10);
+              if (chance >= 8) {
+                return 5
+              }
+              else {
+                return 0
+              }
+            }
+          }
+
+
+          function return_errors(app_degredation){
+            if (app_degredation){
+              console.log("---> Returning Degredated Errors")
+              let chance = Math.floor(Math.random() * 10);
+              if (chance >= 2){
+                return chance;
+              }
+            }
+            return 0;
+          }
+
+
+          function return_traffic(app_degredation){
+            if (app_degredation){
+              console.log("---> Returning Degredated Traffic")
+              return getRandomInt(751, 1000)
+            } else{
+              return Math.floor(Math.random() * 750);
+            }
+          }
+
+
+          function return_saturation(app_degredation){
+            if (app_degredation){
+              console.log("---> Returning Degredated Saturation")
+              return getRandomInt(81, 100)
+            } else {
+              let chance = Math.floor(Math.random() * 10);
+              if (chance >=5) {
+                return getRandomInt(51, 70)
+              }
+              else {
+                return getRandomInt(0, 50)
+              }
+            }
+          }
+
+
+          // Helper Functions
+
+
+          function getRandomInt(min, max) {
+              min = Math.ceil(min);
+              max = Math.floor(max);
+              return Math.floor(Math.random() * (max - min + 1)) + min;
+          }
+
+
+          async function get_config ( exec_id ){
+            let configGet = await executionsClient.getTaskExecutionResult({
+              executionId: exec_id,
+              id: config_step_name
+            });
+
+            return configGet;
+          }
+
+
+          function extract_app_names ( app_config ){
+            let app_names = [];
+
+            app_config.forEach((item) => {
+              app_names.push(item['name']);
+            });
+
+            return app_names;
+          }
+      position:
+        x: 0
+        y: 2
+      predecessors:
+        - variable_definitions
+      conditions:
+        states:
+          variable_definitions: OK
+    variable_definitions:
+      name: variable_definitions
+      description: Task containing all variable definitions used in subsequent steps
+      action: dynatrace.automations:run-javascript
+      input:
+        script: >
+          // optional import of sdk modules
+
+          import { execution } from '@dynatrace-sdk/automation-utils';
+
+
+          export default async function ({ execution_id }) {
+            /*
+            * This workflow will generate all of the resources required for a
+            * SLO/SRG demonstration.  This step in particular will define all of
+            * the variables required for the subsequent steps.
+            *
+            /
+
+            /*
+            ** We will generate resources as part of this workflow.  In order to help determine that resources
+            ** in Dynatrace were generated by this workflow, where possible, we will associate the following
+            ** tag to the resource
+            */
+            let workflow_tag = "Observability Lab";
+
+            /*
+            ** We can use the following variable to programatically create/delete the SLO Objectives
+            */
+
+            let delete_assets = false;
+            let create_assets = false;
+
+            /*
+            ** Mock Application Configuration
+            ** The SLOs & SRGs will be Application Relevant.  The following list
+            ** defines those application names and whether to generate a corresponding Davis Alert.
+            */
+
+            let app_config = [
+              {
+                name: "frontend",
+                degredated: false,
+                problem_card: false
+              },
+              {
+                name: "scheduler",
+                degredated: false,
+                problem_card: false
+              },
+              {
+                name: "billing",
+                degredated: false,
+                problem_card: false
+              },
+              {
+                name: "checkout",
+                degredated: false,
+                problem_card: false
+              }
+            ];
+
+            /*
+            ** Total Degredation Override
+            ** Setting this option to true will cause all applications
+            ** and all metrics to report a metric which will breach all SLOs.
+            **
+            ** This is for triggering an entire system failure
+            */
+            let total_degredation = false;
+
+            /*
+            *
+            ** Mock Metric Definitions
+            **
+            ** We will emit mock metrics which the SLOs will be bound to.
+            ** These metrics will resemble the following format
+            **
+            **** <metric_namespace>.<name>
+            **
+            ** Each metric will have a corresponding dimension which is the application name.
+            ** For the demo to make the most sense, each metric should be related to a
+            ** traditional SLI
+            **
+            **** Degradation Flags
+            ****
+            **** In order to breach the SLO conditions, we will include flags in the metric
+            **** definition that can be flipped on to "induce" a degradated event for that metric.
+            ****
+            **** There is also a top level degradation flag that, when set to true, will cause
+            **** all metrics to be in a degradated state
+            */
+
+            let metric_namespace = "poc";
+
+            let metric_definitions = {
+              latency: {
+                name: "latency",
+                degredated: false,
+                target: 99.98, // Percent
+                warning: 99.99 // Percent
+              },
+              errors: {
+                name: "errors",
+                degredated: false,
+                target: 99.98, // Percent
+                warning: 99.99 // Percent
+              },
+              traffic: {
+                name: "traffic",
+                degredated: false,
+                target: 80, // Percent
+                warning: 90 // Percent
+              },
+              cpu_saturation: {
+                name: "saturation.cpu",
+                degredated: false,
+                target: 99.98, // Percent
+                warning: 99.99 // Percent
+              },
+            };
+
+            /*
+            ** Problem Card Metadata / Configuration
+            **
+            **** problem_event_type: Davis Alert Type
+            **** default_problem_timeout: How Long a Problem Card should stay open
+                                          if the workflow does not run to refresh the timeout
+            **
+            */
+            let problem_event_type = "CUSTOM_ALERT";
+            let default_problem_timeout = 7; //minutes
+
+            return {
+              workflow_tag: workflow_tag,
+              create_assets: create_assets,
+              delete_assets: delete_assets,
+              app_config: app_config,
+              metric_namespace: metric_namespace,
+              metric_definitions: metric_definitions,
+              total_degredation: enable_degredation(total_degredation),
+              problem_event_type: problem_event_type,
+              default_problem_timeout: default_problem_timeout
+            };
+          }
+
+
+          function enable_degredation(override) {
+            let date = new Date();
+            let hour = date.getHours()
+
+            if ([6, 7, 8, 9].includes(hour) || override){
+              console.log("> Simulate Application Degredation Across All Services")
+              return true;
+            } else {
+              return override;
+            }
+          }
+      position:
+        x: 0
+        y: 1
+      predecessors: []
+    generate_davis_problem:
+      name: generate_davis_problem
+      description: Generates a corresponding Davis Problem Card to populate the
+        example dashboard
+      action: dynatrace.automations:run-javascript
+      input:
+        script: >-
+          // optional import of sdk modules
+
+          import { execution } from '@dynatrace-sdk/automation-utils';
+
+          import { executionsClient } from '@dynatrace-sdk/client-automation';
+
+          import { eventsClient, problemsClient } from
+          "@dynatrace-sdk/client-classic-environment-v2";
+
+
+          // Used to fetch the results from the variable definition execution
+          step
+
+          // Should correspond to the step name
+
+          let config_step_name = "variable_definitions";
+
+
+          export default async function ({ execution_id }) {
+            // your code goes here
+            // e.g. get the current execution
+            const ex = await execution(execution_id);
+            let variables = await get_config(execution_id);
+
+            // Validate required variables are defined
+            let app_config = variables['app_config'];
+            let workflow_tag = variables['workflow_tag'];
+            let problem_event_type = variables['problem_event_type'];
+            let default_problem_timeout = variables['default_problem_timeout'];
+
+            console.log(
+          `---------------- Function Start ----------------
+            > App Config : ${app_config.map(config => `Name: ${config.name}, Generate Problem Card: ${config.problem_card}`).join('; ')}
+            > Workflow Tag: ${workflow_tag}
+          ------------------------------------------------
+
+          `);
+
+            await Promise.all(app_config.map(async (config) => {
+              await emit_events(config, workflow_tag, problem_event_type, default_problem_timeout);
+            }));
+          }
+
+
+          async function emit_events( app_config, workflow_tag,
+          problem_event_type, default_problem_timeout ){
+            let emit_event = (generate_events() ? true : app_config.problem_card);
+
+            let problem_definition = {
+              title: `[${workflow_tag}] - ${app_config.name} - Custom Error`,
+              timeout: default_problem_timeout,
+              eventType: problem_event_type,
+              properties: {
+                app_name: app_config.name,
+                workflow: true,
+                tag: workflow_tag
+              }
+            }
+
+            if(emit_event){
+              console.log(`> Problem Required for '${problem_definition['properties']['app_name']}'`);
+
+              let result = await post_event(problem_definition);
+
+              if(result){
+                console.log("> Created/Updated Problem Successfully.");
+              }
+            }
+            else {
+              let problem = await get_open_problem( problem_definition );
+              if( problem ){  
+                console.log(`---> Setting Problem timeout to 0 to "close" problem ${problem['displayId']}`)
+                problem_definition['timeout'] = 0;
+                let result = await post_event(problem_definition);
+                if(result){
+                  console.log("> Updated Problem Successfully.");
+                }
+              } else {
+                console.log(`---> No open problems found to close for ${problem_definition['properties']['app_name']}`)
+              }
+            }
+          }
+
+
+          async function post_event( problem_definition ){
+            console.log(`---> Submitting event request for app ${problem_definition['properties']['app_name']}`);
+            let resp = await eventsClient.createEvent({body: problem_definition});
+
+            // The function indicates whether an API encountered a failure
+            // Returning the inverse indicates the function success
+            return !validate_problem_creation(resp);
+
+          }
+
+
+          async function get_open_problem( problem_definition ){
+            let problem = null;
+            let status = "open";
+            let title_query = problem_definition['title'].length > 30 ? problem_definition['title'].slice(0, 30) : problem_definition['title'];
+
+            let query = {
+              from: 'now-24h',
+              problemSelector: `status(${status}),text("${title_query}")`,
+            }
+            
+            console.log(`> Polling for Open Problems with title containing '${title_query}'`)
+            let problems = await poll_problems(query);
+
+            problems.forEach(item => {
+              if(item['title'] == problem_definition['title']){
+                problem = item;
+              }
+            });
+
+            return problem;
+          }
+
+
+          function validate_problem_creation(event_create_result){
+            let failure = false;
+            let failure_ids = []
+            
+            event_create_result['eventIngestResults'].forEach((result) => {
+              console.log(`---> Problem Result: ${result['status']} | Correlation ID: ${result['correlationId']}`)
+
+              if (result['status'] != "OK"){
+                failure = true;
+                failure_ids.push(result['correlationId'])
+              }
+            });
+
+            if(failure){
+              throw(`Experienced Failure in creating problems.  Correlation IDs: ${failure_ids}`)
+            }
+
+            return failure;
+          }
+
+
+          // Helper Functions
+
+
+          async function get_config ( exec_id ){
+            let configGet = await executionsClient.getTaskExecutionResult({
+              executionId: exec_id,
+              id: config_step_name
+            });
+
+            return configGet;
+          }
+
+
+          function generate_events() {
+            let date = new Date();
+            let hour = date.getHours()
+
+            if ([6, 7, 8, 9].includes(hour)){
+              console.log("> Generate/Keep Active Mock Problem Tickets")
+              return true;
+            } else {
+              return false;
+            }
+          }
+
+
+          async function poll_problems( query ) {
+            let problems = [];
+
+            do {  
+              let result = await problemsClient.getProblems(query);
+
+              if( result ){
+                result['problems'].forEach(item => problems.push(item));
+              }
+
+              /* The Problems API only expects the `nextPageKey` attribute
+                 in subsequent requests. Thus we overwrite the original
+                 query variable below with the current `nextPageKey`
+              */
+              query = {
+                nextPageKey: result['nextPageKey']
+              }
+              
+            } while (query['nextPageKey']);
+
+            return problems;  
+          }
+      position:
+        x: -1
+        y: 2
+      predecessors:
+        - variable_definitions
+      conditions:
+        states:
+          variable_definitions: OK
+  description: ""
+  trigger:
+    schedule:
+      rule: null
+      trigger:
+        type: interval
+        intervalMinutes: 3
+      timezone: America/New_York
+      isActive: false
+      isFaulty: false
+      filterParameters:
+        earliestStart: 2024-09-23
+        earliestStartTime: 00:43
+      inputs: {}
+  schemaVersion: 3
