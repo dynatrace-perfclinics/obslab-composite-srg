@@ -1,0 +1,118 @@
+metadata:
+  version: "1"
+  dependencies:
+    apps:
+      - id: dynatrace.automations
+        version: ^1.905.5
+      - id: dynatrace.site.reliability.guardian
+        version: ^1.12.1
+  inputs:
+    - type: connection
+      schema: app:dynatrace.site.reliability.guardian:guardians
+      targets:
+        - tasks.validate_all_guardians.objectId
+workflow:
+  title: "[Observability Lab] Execute SRGs"
+  tasks:
+    validate_all_guardians:
+      name: validate_all_guardians
+      description: Single SRG that validates the health of all service SRGs
+      action: dynatrace.site.reliability.guardian:validate-guardian-action
+      input:
+        objectId: ""
+        executionId: "{{ execution().id }}"
+        timeframeSelector:
+          to: now
+          from: now-5m
+        timeframeInputType: timeframeSelector
+      position:
+        x: 0
+        y: 3
+      predecessors:
+        - start_service_guardians
+      conditions:
+        states:
+          start_service_guardians: ANY
+      waitBefore: 30
+    start_service_guardians:
+      name: start_service_guardians
+      description: For all tagged SRGs, start each guardian.
+      action: dynatrace.site.reliability.guardian:validate-guardian-action
+      input:
+        objectId: "{{ _.item.value.name }}"
+        executionId: "{{ execution().id }}"
+        expressionTo: ""
+        expressionFrom: ""
+        timeframeSelector:
+          to: now
+          from: now-15m
+        timeframeInputType: timeframeSelector
+      position:
+        x: 0
+        y: 2
+      predecessors:
+        - find_guardians_with_tags
+      conditions:
+        states:
+          find_guardians_with_tags: OK
+      concurrency: 1
+      withItems: item in {{ result("find_guardians_with_tags") }}
+    find_guardians_with_tags:
+      name: find_guardians_with_tags
+      description: Leverage SDK to query for all Guardians and filter by appropriate tags
+      action: dynatrace.automations:run-javascript
+      input:
+        script: >-
+          import { settingsObjectsClient } from
+          "@dynatrace-sdk/client-classic-environment-v2";
+
+          import { execution } from '@dynatrace-sdk/automation-utils';
+
+
+          export default async function ({ execution_id }) {
+            // Get details of current workflow
+            const ex = await execution(execution_id);
+            
+            const tags_to_query = [
+              'application:SuperGreatApp'
+            ];
+            console.log("tags: " + tags_to_query);
+            
+            // Get all the SRGs 
+            const srgs = await settingsObjectsClient.getSettingsObjects(
+              { schemaIds: "app:dynatrace.site.reliability.guardian:guardians", 
+                 scopes:  "environment" 
+              } 
+            );
+
+            console.log("all srgs: " + srgs);
+            
+            // Filter them with tags
+            const filtered_srgs = srgs.items.filter(
+              item => tags_to_query.every(
+                tag => item.value.tags.includes(tag))
+            );
+
+            console.log("filtered srgs: " + JSON.stringify(filtered_srgs));
+
+            return filtered_srgs; 
+          }
+      position:
+        x: 0
+        y: 1
+      predecessors: []
+  description: ""
+  trigger:
+    schedule:
+      rule: null
+      trigger:
+        type: interval
+        intervalMinutes: 180
+      timezone: America/New_York
+      isActive: false
+      isFaulty: false
+      filterParameters:
+        earliestStart: 2024-08-27
+        earliestStartTime: 00:00
+      inputs: {}
+  schemaVersion: 3

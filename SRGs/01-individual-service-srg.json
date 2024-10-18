@@ -1,0 +1,41 @@
+{
+  "name": "[Observability Lab] Scheduler Service",
+  "tags": [
+    "application:SuperGreatApp"
+  ],
+  "variables": [],
+  "objectives": [
+    {
+      "name": "CPU Saturation",
+      "objectiveType": "REFERENCE_SLO",
+      "referenceSlo": "func:slo._poc_scheduler__cpu_saturation",
+      "comparisonOperator": "GREATER_THAN_OR_EQUAL",
+      "target": 99.98,
+      "warning": 99.99
+    },
+    {
+      "name": "Errors",
+      "objectiveType": "REFERENCE_SLO",
+      "referenceSlo": "func:slo._poc_scheduler__errors",
+      "comparisonOperator": "GREATER_THAN_OR_EQUAL",
+      "target": 99.98,
+      "warning": 99.99
+    },
+    {
+      "name": "Latency",
+      "objectiveType": "REFERENCE_SLO",
+      "referenceSlo": "func:slo._poc___scheduler__latency",
+      "comparisonOperator": "GREATER_THAN_OR_EQUAL",
+      "target": 99.98,
+      "warning": 99.99
+    },
+    {
+      "name": "Traffic",
+      "objectiveType": "REFERENCE_SLO",
+      "referenceSlo": "func:slo._poc_scheduler__traffic",
+      "comparisonOperator": "GREATER_THAN_OR_EQUAL",
+      "target": 80.0,
+      "warning": 90.0
+    }
+  ]
+}

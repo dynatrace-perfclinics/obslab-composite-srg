@@ -1,0 +1,56 @@
+{
+  "name": "[Observability Lab] Application Health",
+  "tags": [],
+  "variables": [
+    {
+      "name": "billing_srg",
+      "definition": "{{.appdynatracesitereliabilityguardianguardians__48b0a42b422a3eeeb22917b7986f65cc__id}}"
+    },
+    {
+      "name": "checkout_srg",
+      "definition": "{{.appdynatracesitereliabilityguardianguardians__8f8f5400e451313eaeba106410ecf223__id}}"
+    },
+    {
+      "name": "frontend_srg",
+      "definition": "{{.appdynatracesitereliabilityguardianguardians__344e6c725fb737ee88689e052bab4e20__id}}"
+    },
+    {
+      "name": "scheduler_srg",
+      "definition": "{{.appdynatracesitereliabilityguardianguardians__09904e011dfc304e85c86b9c591075cf__id}}"
+    }
+  ],
+  "objectives": [
+    {
+      "name": "Billing Health",
+      "objectiveType": "DQL",
+      "dqlQuery": "fetch bizevents\n| filter event.provider == \"dynatrace.site.reliability.guardian\"\n| filter matchesValue(guardian.id, $billing_srg)\n| filter matchesPhrase(event.type, \"guardian.validation.finished\")\n| sort timestamp desc\n| summarize status = takeFirst(validation.status)\n| fieldsAdd result = if(status == \"pass\", 100, else: 0)\n| fieldsKeep result",
+      "autoAdaptiveThresholdEnabled": false,
+      "comparisonOperator": "GREATER_THAN_OR_EQUAL",
+      "target": 100.0
+    },
+    {
+      "name": "Checkout Health",
+      "objectiveType": "DQL",
+      "dqlQuery": "fetch bizevents\n| filter event.provider == \"dynatrace.site.reliability.guardian\"\n| filter matchesValue(guardian.id, $checkout_srg)\n| filter matchesPhrase(event.type, \"guardian.validation.finished\")\n| sort timestamp desc\n| summarize status = takeFirst(validation.status)\n| fieldsAdd result = if(status == \"pass\", 100, else: 0)\n| fieldsKeep result",
+      "autoAdaptiveThresholdEnabled": false,
+      "comparisonOperator": "GREATER_THAN_OR_EQUAL",
+      "target": 100.0
+    },
+    {
+      "name": "Frontend Health",
+      "objectiveType": "DQL",
+      "dqlQuery": "fetch bizevents\n| filter event.provider == \"dynatrace.site.reliability.guardian\"\n| filter matchesValue(guardian.id, $frontend_srg)\n| filter matchesPhrase(event.type, \"guardian.validation.finished\")\n| sort timestamp desc\n| summarize status = takeFirst(validation.status)\n| fieldsAdd result = if(status == \"pass\", 100, else: 0)\n| fieldsKeep result",
+      "autoAdaptiveThresholdEnabled": false,
+      "comparisonOperator": "GREATER_THAN_OR_EQUAL",
+      "target": 100.0
+    },
+    {
+      "name": "Scheduler Health",
+      "objectiveType": "DQL",
+      "dqlQuery": "fetch bizevents\n| filter event.provider == \"dynatrace.site.reliability.guardian\"\n| filter matchesValue(guardian.id, $scheduler_srg)\n| filter matchesPhrase(event.type, \"guardian.validation.finished\")\n| sort timestamp desc\n| summarize status = takeFirst(validation.status)\n| fieldsAdd result = if(status == \"pass\", 100, else: 0)\n| fieldsKeep result",
+      "autoAdaptiveThresholdEnabled": false,
+      "comparisonOperator": "GREATER_THAN_OR_EQUAL",
+      "target": 100.0
+    }
+  ]
+}
