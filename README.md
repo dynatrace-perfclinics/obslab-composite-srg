@@ -66,6 +66,9 @@ Each folder contains a subsequent README with screenshots and more detail on eac
     - Due to how the Dynatrace APIs currently work, you will need to modify `01-individual-service-srg.json` file for your use case and leverage monaco to create those SRGs.
         - If you're using the mock metric workflow, four SRGs will need to be created, one for each of the mock services.
     - The same approach can be taken for the `02-composite-srg.json` file to define the Composite SRG.
+1. Dashboard
+    - We've provided a JSON export of the Dashboard used in the demo to present the results from all of the SRGs.
+    - The README.md within the `dashboard` folder also shows the DQL used without having to download and inspect or deploy the JSON.
 1. GitHub Actions Pipeline & Script
     - Part of the appeal of the Composite SRG is to integrate it with your code deployment process
     - Within `composite_srg_pipeline` we have a Python script that, when a commit is made, executes the SRG workflow and inspects the result.
